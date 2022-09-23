@@ -5,6 +5,8 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Union
 
 import mlflow
+from git import Repo
+
 from kedro.config import MissingConfigException
 from kedro.framework.context import KedroContext
 from kedro.framework.hooks import hook_impl
@@ -16,13 +18,18 @@ from mlflow.entities import RunStatus
 from mlflow.models import infer_signature
 from mlflow.utils.validation import MAX_PARAM_VAL_LENGTH
 
-from kedro_mlflow.config.kedro_mlflow_config import KedroMlflowConfig
+from kedro_mlflow.config.kedro_mlflow_config import (
+    KedroMlflowConfig,
+    GitNotTrackingException,
+)
 from kedro_mlflow.framework.hooks.utils import (
     _assert_mlflow_enabled,
     _flatten_dict,
     _generate_kedro_command,
 )
-from kedro_mlflow.io.catalog.switch_catalog_logging import switch_catalog_logging
+from kedro_mlflow.io.catalog.switch_catalog_logging import (
+    switch_catalog_logging,
+)
 from kedro_mlflow.io.metrics import (
     MlflowMetricDataSet,
     MlflowMetricHistoryDataSet,
@@ -62,7 +69,9 @@ class MlflowHook:
             conf_mlflow_yml = context.config_loader.get("mlflow*", "mlflow*/**")
         except MissingConfigException:
             LOGGER.warning(
-                "No 'mlflow.yml' config file found in environment. Default configuration will be used. Use ``kedro mlflow init`` command in CLI to customize the configuration."
+                "No 'mlflow.yml' config file found in environment. \
+                Default configuration will be used. \
+                Use ``kedro mlflow init`` command in CLI to customize the configuration."
             )
             # we create an empty dict to have the same behaviour when the mlflow.yml
             # is commented out. In this situation there is no MissingConfigException
@@ -70,6 +79,8 @@ class MlflowHook:
             conf_mlflow_yml = {}
 
         mlflow_config = KedroMlflowConfig.parse_obj(conf_mlflow_yml)
+        # jaca = conf_mlflow_yml.get("tracking", {}).get("experiment", {}).get("use_brach_name")
+
 
         if (
             conf_mlflow_yml.get("tracking", {}).get("experiment", {}).get("name")
@@ -83,6 +94,26 @@ class MlflowHook:
                 metadata = _get_project_metadata(context._project_path)
                 experiment_name = metadata.package_name
             mlflow_config.tracking.experiment.name = experiment_name
+
+        # asdding branch name to experiment name
+        if (
+            mlflow_config.tracking.experiment.use_branch_name
+        ):
+            try:
+                _cwd_branch = Repo(Path.cwd())
+                experiment_name = mlflow_config.tracking.experiment.name
+                mlflow_config.tracking.experiment.name = (
+                    f"{_cwd_branch.active_branch.name}_{experiment_name}"
+                )
+
+            except GitNotTrackingException:
+                LOGGER.warning(
+                    "Told to use branch as experiment name, \
+                    but the current working directory is not \
+                    beign tracked by git.\
+                    Use ''git init'' to start tracking the project \
+                    and create the desired / appropriate branch."
+                )
 
         mlflow_config.setup(context)  # setup global mlflow configuration
 
@@ -214,7 +245,8 @@ class MlflowHook:
             )
         else:
             logging.info(
-                "kedro-mlflow logging is deactivated for this pipeline in the configuration. This includes DataSets and parameters."
+                "kedro-mlflow logging is deactivated for this pipeline in the configuration. \
+                This includes DataSets and parameters."
             )
             switch_catalog_logging(catalog, False)
 
@@ -271,7 +303,8 @@ class MlflowHook:
                 mlflow.set_tag(name, value)
             elif self.long_params_strategy == "truncate":
                 self._logger.warning(
-                    f"Parameter '{name}' (value length {str_value_length}) is truncated to its {MAX_PARAM_VAL_LENGTH} first characters."
+                    f"Parameter '{name}' (value length {str_value_length}) \
+                        is truncated to its {MAX_PARAM_VAL_LENGTH} first characters."
                 )
                 mlflow.log_param(name, str_value[0:MAX_PARAM_VAL_LENGTH])
 

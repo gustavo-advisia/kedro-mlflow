@@ -13,6 +13,17 @@ from typing_extensions import Literal
 
 LOGGER = getLogger(__name__)
 
+class GitNotTrackingException(Exception):
+    """Raised when the current working directory is not being tracked by git."""
+
+    pass
+
+
+class MLflowConfigCredentialsException(Exception):
+    """Raised when the credentials needed to configure and create the azure_mlflow_uri where not found."""
+
+    pass
+
 
 class MlflowServerOptions(BaseModel):
     # mutable default is ok for pydantic : https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
@@ -35,6 +46,7 @@ class DisableTrackingOptions(BaseModel):
 class ExperimentOptions(BaseModel):
     name: str = "Default"
     restore_if_deleted: StrictBool = True
+    use_branch_name: StrictBool = True
     _experiment: Experiment = PrivateAttr()
     # do not create _experiment immediately to avoid creating
     # a database connection when creating the object
@@ -62,7 +74,21 @@ class DictParamsOptions(BaseModel):
         extra = "forbid"
 
 
+class TagsParamsOptions(BaseModel):
+    area: Optional[str] = None
+    client: Optional[str] = None
+    ds_owner: Optional[str] = None
+    mle_owner: Optional[str] = None
+    type: Optional[str] = None
+    application: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
 class MlflowParamsOptions(BaseModel):
+    multitarget: StrictBool = False
+    tags: TagsParamsOptions = TagsParamsOptions()
     dict_params: DictParamsOptions = DictParamsOptions()
     long_params_strategy: Literal["fail", "truncate", "tag"] = "fail"
 
@@ -104,8 +130,8 @@ class KedroMlflowConfig(BaseModel):
     def setup(self, context):
         """Setup all the mlflow configuration"""
 
-        self.server.mlflow_tracking_uri = _validate_mlflow_tracking_uri(
-            project_path=context.project_path, uri=self.server.mlflow_tracking_uri
+        self.server.mlflow_tracking_uri = self._validate_mlflow_tracking_uri(
+            project_path=context.project_path, uri=self.server.mlflow_tracking_uri, context = context
         )
 
         # init after validating the uri, else mlflow creates a mlruns folder at the root
@@ -164,46 +190,65 @@ class KedroMlflowConfig(BaseModel):
         )
 
 
-def _validate_mlflow_tracking_uri(project_path: str, uri: Optional[str]) -> str:
-    """Format the uri provided to match mlflow expectations.
+    def _validate_mlflow_tracking_uri(self, project_path: str, uri: Optional[str], context: KedroContext) -> str:
+        """Format the uri provided to match mlflow expectations.
 
-    Arguments:
-        uri {Union[None, str]} -- A valid filepath for mlflow uri
+        Arguments:
+            uri {Union[None, str]} -- A valid filepath for mlflow uri
 
-    Returns:
-        str -- A valid mlflow_tracking_uri
-    """
+        Returns:
+            str -- A valid mlflow_tracking_uri
+        """
 
-    # this is a special reserved keyword for mlflow which should not be converted to a path
-    # se: https://mlflow.org/docs/latest/tracking.html#where-runs-are-recorded
-    if uri is None:
-        # do not use mlflow.get_tracking_uri() because if there is no env var,
-        # it resolves to 'Path.cwd() / "mlruns"'
-        # but we want 'project_path / "mlruns"'
-        uri = os.environ.get("MLFLOW_TRACKING_URI", "mlruns")
+        if uri == "databricks":
+            return uri
+        
+        elif uri == "azure":
+            conf_creds = context._get_config_credentials()
+            azure_credentials = conf_creds.get(self.server.credentials, {})
 
-    if uri == "databricks":
-        return uri
+            try:
+                subscription_id = azure_credentials['subscription_id']
+                resource_group = azure_credentials['resource_group']
+                workspace_name = azure_credentials['workspace_name']
+                region = azure_credentials['region']
 
-    # if no tracking uri is provided, we register the runs locally at the root of the project
-    pathlib_uri = PurePath(uri)
+                azure_mlflow_uri =  f"azureml://{region}.api.azureml.ms/mlflow/v1.0/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{workspace_name}"
 
-    if pathlib_uri.is_absolute():
-        valid_uri = pathlib_uri.as_uri()
-    else:
-        parsed = urlparse(uri)
-        if parsed.scheme == "":
-            # if it is a local relative path, make it absolute
-            # .resolve() does not work well on windows
-            # .absolute is undocumented and have known bugs
-            # Path.cwd() / uri is the recommend way by core developpers.
-            # See : https://discuss.python.org/t/pathlib-absolute-vs-resolve/2573/6
-            valid_uri = (Path(project_path) / uri).as_uri()
-            LOGGER.info(
-                f"The 'mlflow_tracking_uri' key in mlflow.yml is relative ('server.mlflow_tracking_uri = {uri}'). It is converted to a valid uri: '{valid_uri}'"
-            )
-        else:
-            # else assume it is an uri
-            valid_uri = uri
+                return azure_mlflow_uri
 
-    return valid_uri
+            except MLflowConfigCredentialsException:
+                LOGGER.warning(
+                    "Check the Azure ML credetials in the credentials.yml file."
+                    )
+        
+        else: 
+            # if uri is None (if no tracking uri is provided), we register the runs locally at the root of the project)
+            # do not use mlflow.get_tracking_uri() because if there is no env var,
+            # it resolves to 'Path.cwd() / "mlruns"'
+            # but we want 'project_path / "mlruns"'
+            # uri = os.environ.get("MLFLOW_TRACKING_URI", "mlruns")
+
+            uri = os.environ.get("MLFLOW_TRACKING_URI", "mlruns")
+
+            pathlib_uri = PurePath(uri)
+
+            if pathlib_uri.is_absolute():
+                valid_uri = pathlib_uri.as_uri()
+            else:
+                parsed = urlparse(uri)
+                if parsed.scheme == "":
+                    # if it is a local relative path, make it absolute
+                    # .resolve() does not work well on windows
+                    # .absolute is undocumented and have known bugs
+                    # Path.cwd() / uri is the recommend way by core developpers.
+                    # See : https://discuss.python.org/t/pathlib-absolute-vs-resolve/2573/6
+                    valid_uri = (Path(project_path) / uri).as_uri()
+                    LOGGER.info(
+                        f"The 'mlflow_tracking_uri' key in mlflow.yml is relative ('server.mlflow_tracking_uri = {uri}'). It is converted to a valid uri: '{valid_uri}'"
+                    )
+                else:
+                    # else assume it is an uri
+                    valid_uri = uri
+
+            return valid_uri
