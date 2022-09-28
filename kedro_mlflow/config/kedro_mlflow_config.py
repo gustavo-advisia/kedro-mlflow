@@ -13,20 +13,25 @@ from typing_extensions import Literal
 
 LOGGER = getLogger(__name__)
 
-class GitNotTrackingException(Exception):
-    """Raised when the current working directory is not being tracked by git."""
+
+class ExpNameNotEnvSet(Exception):
+    """Raised if the experiment name \
+        is not set as environment variable."""
 
     pass
 
 
 class MLflowConfigCredentialsException(Exception):
-    """Raised when the credentials needed to configure and create the azure_mlflow_uri where not found."""
+    """Raised if the credentials needed to \
+        configure and create the azure_mlflow_uri \
+             are not found."""
 
     pass
 
 
 class MlflowServerOptions(BaseModel):
-    # mutable default is ok for pydantic : https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
+    # mutable default is ok for pydantic :
+    #  https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
     mlflow_tracking_uri: Optional[str] = None
     credentials: Optional[str] = None
     _mlflow_client: MlflowClient = PrivateAttr()
@@ -36,7 +41,8 @@ class MlflowServerOptions(BaseModel):
 
 
 class DisableTrackingOptions(BaseModel):
-    # mutable default is ok for pydantic : https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
+    # mutable default is ok for pydantic :
+    #  https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
     pipelines: List[str] = []
 
     class Config:
@@ -46,7 +52,7 @@ class DisableTrackingOptions(BaseModel):
 class ExperimentOptions(BaseModel):
     name: str = "Default"
     restore_if_deleted: StrictBool = True
-    use_branch_name: StrictBool = True
+    exp_name_environ_var: StrictBool = True
     _experiment: Experiment = PrivateAttr()
     # do not create _experiment immediately to avoid creating
     # a database connection when creating the object
@@ -97,7 +103,8 @@ class MlflowParamsOptions(BaseModel):
 
 
 class MlflowTrackingOptions(BaseModel):
-    # mutable default is ok for pydantic : https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
+    # mutable default is ok for pydantic :
+    # https://stackoverflow.com/questions/63793662/how-to-give-a-pydantic-list-field-a-default-value
     disable_tracking: DisableTrackingOptions = DisableTrackingOptions()
     experiment: ExperimentOptions = ExperimentOptions()
     run: RunOptions = RunOptions()
@@ -131,7 +138,9 @@ class KedroMlflowConfig(BaseModel):
         """Setup all the mlflow configuration"""
 
         self.server.mlflow_tracking_uri = self._validate_mlflow_tracking_uri(
-            project_path=context.project_path, uri=self.server.mlflow_tracking_uri, context = context
+            project_path=context.project_path,
+            uri=self.server.mlflow_tracking_uri,
+            context=context,
         )
 
         # init after validating the uri, else mlflow creates a mlruns folder at the root
@@ -171,7 +180,8 @@ class KedroMlflowConfig(BaseModel):
                 self.tracking.experiment.restore_if_deleted
                 and mlflow_experiment.lifecycle_stage == "deleted"
             ):
-                # the experiment was created, then deleted : we have to restore it manually before setting it as the active one
+                # the experiment was created, then deleted :
+                # we have to restore it manually before setting it as the active one
                 self.server._mlflow_client.restore_experiment(
                     mlflow_experiment.experiment_id
                 )
@@ -189,8 +199,9 @@ class KedroMlflowConfig(BaseModel):
             )
         )
 
-
-    def _validate_mlflow_tracking_uri(self, project_path: str, uri: Optional[str], context: KedroContext) -> str:
+    def _validate_mlflow_tracking_uri(
+        self, project_path: str, uri: Optional[str], context: KedroContext
+    ) -> str:
         """Format the uri provided to match mlflow expectations.
 
         Arguments:
@@ -202,28 +213,29 @@ class KedroMlflowConfig(BaseModel):
 
         if uri == "databricks":
             return uri
-        
+
         elif uri == "azure":
             conf_creds = context._get_config_credentials()
             azure_credentials = conf_creds.get(self.server.credentials, {})
 
             try:
-                subscription_id = azure_credentials['subscription_id']
-                resource_group = azure_credentials['resource_group']
-                workspace_name = azure_credentials['workspace_name']
-                region = azure_credentials['region']
+                subscription_id = azure_credentials["subscription_id"]
+                resource_group = azure_credentials["resource_group"]
+                workspace_name = azure_credentials["workspace_name"]
+                region = azure_credentials["region"]
 
-                azure_mlflow_uri =  f"azureml://{region}.api.azureml.ms/mlflow/v1.0/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{workspace_name}"
+                azure_mlflow_uri = f"azureml://{region}.api.azureml.ms/mlflow/v1.0/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.MachineLearningServices/workspaces/{workspace_name}"
 
                 return azure_mlflow_uri
 
             except MLflowConfigCredentialsException:
                 LOGGER.warning(
                     "Check the Azure ML credetials in the credentials.yml file."
-                    )
-        
-        else: 
-            # if uri is None (if no tracking uri is provided), we register the runs locally at the root of the project)
+                )
+
+        else:
+            # if uri is None (if no tracking uri is provided), 
+            # we register the runs locally at the root of the project)
             # do not use mlflow.get_tracking_uri() because if there is no env var,
             # it resolves to 'Path.cwd() / "mlruns"'
             # but we want 'project_path / "mlruns"'
@@ -245,7 +257,9 @@ class KedroMlflowConfig(BaseModel):
                     # See : https://discuss.python.org/t/pathlib-absolute-vs-resolve/2573/6
                     valid_uri = (Path(project_path) / uri).as_uri()
                     LOGGER.info(
-                        f"The 'mlflow_tracking_uri' key in mlflow.yml is relative ('server.mlflow_tracking_uri = {uri}'). It is converted to a valid uri: '{valid_uri}'"
+                        f"The 'mlflow_tracking_uri' key in mlflow.yml is relative \
+                            ('server.mlflow_tracking_uri = {uri}'). \
+                                It is converted to a valid uri: '{valid_uri}'"
                     )
                 else:
                     # else assume it is an uri

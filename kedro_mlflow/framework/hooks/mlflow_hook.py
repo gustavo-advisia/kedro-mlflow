@@ -3,6 +3,7 @@ from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Union
+import os
 
 import mlflow
 from git import Repo
@@ -20,7 +21,7 @@ from mlflow.utils.validation import MAX_PARAM_VAL_LENGTH
 
 from kedro_mlflow.config.kedro_mlflow_config import (
     KedroMlflowConfig,
-    GitNotTrackingException,
+    ExpNameNotEnvSet,
 )
 from kedro_mlflow.framework.hooks.utils import (
     _assert_mlflow_enabled,
@@ -81,7 +82,6 @@ class MlflowHook:
         mlflow_config = KedroMlflowConfig.parse_obj(conf_mlflow_yml)
         # jaca = conf_mlflow_yml.get("tracking", {}).get("experiment", {}).get("use_brach_name")
 
-
         if (
             conf_mlflow_yml.get("tracking", {}).get("experiment", {}).get("name")
             is None
@@ -95,24 +95,19 @@ class MlflowHook:
                 experiment_name = metadata.package_name
             mlflow_config.tracking.experiment.name = experiment_name
 
-        # asdding branch name to experiment name
-        if (
-            mlflow_config.tracking.experiment.use_branch_name
-        ):
+        # getting exp_name from env variable
+        if mlflow_config.tracking.experiment.exp_name_environ_var:
             try:
-                _cwd_branch = Repo(Path.cwd())
-                experiment_name = mlflow_config.tracking.experiment.name
                 mlflow_config.tracking.experiment.name = (
-                    f"{_cwd_branch.active_branch.name}_{experiment_name}"
+                    os.environ.get("MLFLOW_EXP_NAME")
                 )
 
-            except GitNotTrackingException:
+            except ExpNameNotEnvSet:
                 LOGGER.warning(
-                    "Told to use branch as experiment name, \
-                    but the current working directory is not \
-                    beign tracked by git.\
-                    Use ''git init'' to start tracking the project \
-                    and create the desired / appropriate branch."
+                    f"Was told that the experiment name "
+                    f"was set in the exp_name_environ_var "
+                    f"environment variable, but that variable "
+                    f"was not found."
                 )
 
         mlflow_config.setup(context)  # setup global mlflow configuration
